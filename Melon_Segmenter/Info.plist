@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIconFiles</key>
+	<array>
+		<string>AppIcon60x60</string>
+		<string>AppIcon40x40</string>
+		<string>AppIcon29x29</string>
+	</array>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.328652161574-6ciggepr5q6fmval0etme28968mhg1rk</string>
+			</array>
+		</dict>
+	</array>
+	<key>GIDClientID</key>
+	<string>328652161574-6ciggepr5q6fmval0etme28968mhg1rk.apps.googleusercontent.com</string>
+</dict>
+</plist>
