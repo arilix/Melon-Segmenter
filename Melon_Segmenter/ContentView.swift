@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PhotosUI
 
 struct ContentView: View {
     private enum Stage {
@@ -12,6 +13,7 @@ struct ContentView: View {
     }
 
     @State private var isShowingCamera = false
+    @State private var photoPickerItem: PhotosPickerItem?
     @State private var stage: Stage = .idle
     @AppStorage("melon.captureIndex") private var captureIndex: String = ""
     private let uploader = GoogleDriveUploader()
@@ -68,6 +70,26 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
         }
+        .onChange(of: photoPickerItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                await loadPickedPhoto(newItem)
+                photoPickerItem = nil
+            }
+        }
+    }
+
+    private func loadPickedPhoto(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data) else {
+                stage = .failure("Failed to open the photo from your library.")
+                return
+            }
+            stage = .segmenting(original: image.normalizedOrientation())
+        } catch {
+            stage = .failure("Failed to open photo: \(error.localizedDescription)")
+        }
     }
 
     private var header: some View {
@@ -87,7 +109,7 @@ struct ContentView: View {
                     .font(.title2.bold())
                     .foregroundStyle(MelonTheme.meadowGreen)
 
-                Text("Potong melon-mu dengan AI")
+                Text("Cut your melon with AI")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
             }
@@ -109,12 +131,12 @@ struct ContentView: View {
                 .shadow(color: MelonTheme.accentTeal.opacity(0.35), radius: 24, y: 8)
 
             VStack(spacing: 8) {
-                Text("Siap menyegmentasi melon? 🍈")
+                Text("Ready to segment your melon? 🍈")
                     .font(.title3.bold())
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.center)
 
-                Text("Ambil foto melon, tap bagian melonnya, lalu lihat seberapa kompleks net kulitnya sebelum dikirim ke Google Drive.")
+                Text("Take a photo of your melon, tap on it, then see how complex its net pattern is before sending it to Google Drive.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.65))
                     .multilineTextAlignment(.center)
@@ -122,10 +144,10 @@ struct ContentView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Index Capture")
+                Text("Capture Index")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
-                TextField("Contoh: 001", text: $captureIndex)
+                TextField("e.g. 001", text: $captureIndex)
                     .textFieldStyle(.plain)
                     .padding(.vertical, 10)
                     .padding(.horizontal, 14)
@@ -140,9 +162,14 @@ struct ContentView: View {
             Button {
                 isShowingCamera = true
             } label: {
-                Label("Ambil Foto", systemImage: "camera.fill")
+                Label("Take Photo", systemImage: "camera.fill")
             }
             .buttonStyle(MelonPrimaryButtonStyle())
+
+            PhotosPicker(selection: $photoPickerItem, matching: .images) {
+                Label("Choose from Library", systemImage: "photo.on.rectangle")
+            }
+            .buttonStyle(MelonSecondaryButtonStyle())
         }
         .padding(.bottom, 24)
     }
@@ -153,7 +180,7 @@ struct ContentView: View {
             ProgressView()
                 .tint(MelonTheme.accentTeal)
                 .scaleEffect(1.6)
-            Text("Mengunggah ke Google Drive…")
+            Text("Uploading to Google Drive…")
                 .font(.headline)
                 .foregroundStyle(.white.opacity(0.85))
             Spacer()
@@ -166,10 +193,10 @@ struct ContentView: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 72))
                 .foregroundStyle(MelonTheme.meadowGreen)
-            Text("Berhasil diunggah! 🎉")
+            Text("Upload successful! 🎉")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
-            Text("Foto asli, hasil segmentasi, visualisasi GNG, dan data kompleksitas sudah tersimpan di folder \"Melon Segmenter\" — termasuk baris baru di complexity_log.csv.")
+            Text("The original photo, segmentation result, GNG visualization, and complexity data have been saved to the \"Melon Segmenter\" folder — including a new row in complexity_log.csv.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.65))
                 .multilineTextAlignment(.center)
@@ -178,7 +205,7 @@ struct ContentView: View {
             Button {
                 stage = .idle
             } label: {
-                Label("Ambil Foto Lagi", systemImage: "camera.fill")
+                Label("Take Another Photo", systemImage: "camera.fill")
             }
             .buttonStyle(MelonPrimaryButtonStyle())
         }
@@ -191,7 +218,7 @@ struct ContentView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(.orange)
-            Text("Oops, ada masalah")
+            Text("Oops, something went wrong")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
             Text(message)
@@ -203,22 +230,22 @@ struct ContentView: View {
             Button {
                 stage = .idle
             } label: {
-                Label("Coba Lagi", systemImage: "arrow.counterclockwise")
+                Label("Try Again", systemImage: "arrow.counterclockwise")
             }
             .buttonStyle(MelonPrimaryButtonStyle())
         }
         .padding(.bottom, 24)
     }
 
-    private func upload(original: UIImage, segmented: UIImage, visualization: UIImage, metrics: NetComplexityMetrics) {
+    private func upload(original: UIImage, segmented: UIImage, visualization: UIImage, metrics: NetDensityMetrics) {
         guard let presentingVC = UIApplication.shared.keyWindowRootViewController else {
-            stage = .failure("Tidak dapat menemukan tampilan untuk sign-in Google.")
+            stage = .failure("Couldn't find a view to present Google sign-in.")
             return
         }
         guard let originalData = original.pngData(),
               let segmentedData = segmented.pngData(),
               let visualizationData = visualization.pngData() else {
-            stage = .failure("Gagal membuat file PNG dari hasil.")
+            stage = .failure("Failed to create PNG data from the result.")
             return
         }
 
@@ -236,7 +263,7 @@ struct ContentView: View {
                 )
                 stage = .success
             } catch {
-                stage = .failure("Gagal mengunggah: \(error.localizedDescription)")
+                stage = .failure("Upload failed: \(error.localizedDescription)")
             }
         }
     }

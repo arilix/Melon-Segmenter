@@ -31,7 +31,7 @@ struct SegmentationView: View {
                         VStack(spacing: 10) {
                             ProgressView()
                                 .tint(MelonTheme.accentTeal)
-                            Text("Mensegmentasi…")
+                            Text("Segmenting…")
                                 .font(.subheadline.bold())
                                 .foregroundStyle(.white)
                         }
@@ -47,7 +47,7 @@ struct SegmentationView: View {
                     .font(.footnote)
                     .foregroundStyle(.orange)
             } else if segmentedImage == nil {
-                Label("Tap melon di foto untuk menyegmentasinya", systemImage: "hand.point.up.left.fill")
+                Label("Tap the melon in the photo to segment it", systemImage: "hand.point.up.left.fill")
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.65))
             }
@@ -56,7 +56,7 @@ struct SegmentationView: View {
                 Button {
                     onRetake()
                 } label: {
-                    Label("Ambil Ulang", systemImage: "arrow.counterclockwise")
+                    Label("Retake", systemImage: "arrow.counterclockwise")
                 }
                 .buttonStyle(MelonSecondaryButtonStyle())
 
@@ -65,7 +65,7 @@ struct SegmentationView: View {
                         self.segmentedImage = nil
                         errorMessage = nil
                     } label: {
-                        Label("Coba Lagi", systemImage: "hand.tap.fill")
+                        Label("Try Again", systemImage: "hand.tap.fill")
                     }
                     .buttonStyle(MelonSecondaryButtonStyle())
                 }
@@ -75,7 +75,7 @@ struct SegmentationView: View {
                 Button {
                     onConfirm(segmentedImage)
                 } label: {
-                    Label("Analisis Net", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                    Label("Analyze Net", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
                 }
                 .buttonStyle(MelonPrimaryButtonStyle())
             }
@@ -96,9 +96,12 @@ struct SegmentationView: View {
 
         Task {
             do {
-                segmentedImage = try segmenter.segment(image: originalImage, tapPoint: imagePoint)
+                // `segmenter` is now an actor, so this call hops off the
+                // main actor for the actual CoreML inference instead of
+                // blocking it.
+                segmentedImage = try await segmenter.segment(image: originalImage, tapPoint: imagePoint)
             } catch {
-                errorMessage = "Gagal segmentasi: \(error.localizedDescription)"
+                errorMessage = "Segmentation failed: \(error.localizedDescription)"
             }
             isSegmenting = false
         }

@@ -26,6 +26,11 @@ struct GNGConfig {
     var maxInsertionsPerEpoch: Int = 20
     /// Chance, per epoch, of pruning nodes that never won as the nearest node.
     var pruneChance: Double = 0.1
+    /// Absolute early-stop threshold, in the same linear pixel units as the
+    /// input points: once the mean distance from sampled points to their
+    /// nearest node drops to/below this, stop growing — checked in addition
+    /// to (not instead of) the relative plateau check above.
+    var stopError: Double = 2.5
 }
 
 /// Swift port of **DBL-GNG** (Distributed Batch Learning Growing Neural Gas,
@@ -37,10 +42,15 @@ struct GNGConfig {
 /// percentile), which converges in far fewer passes over the data.
 ///
 /// On top of the reference algorithm, this adds early stopping: epochs stop
-/// once the mean quantization error (mean distance from each sampled point
-/// to its nearest node) plateaus — its relative improvement over the last
-/// few epochs drops below a threshold — instead of always running to
-/// `maxEpochs`, so simpler textures converge with fewer nodes/epochs.
+/// once the mean quantization error (mean *linear* distance from each
+/// sampled point to its nearest node — `KDTree.nearestTwo` returns squared
+/// distance, so this is explicitly `sqrt`'d before use) plateaus, or drops
+/// to/below `GNGConfig.stopError`, instead of always running to `maxEpochs`.
+///
+/// All randomness (`shuffled`, `random(in:)`) is routed through an explicit
+/// `RandomNumberGenerator` passed into `train(points:rng:)`, so results are
+/// reproducible across runs given the same seed — the system RNG used by
+/// the free `.random`/`.shuffled` functions is not seedable.
 final class GrowingNeuralGas {
     private(set) var positions: [CGPoint] = []
     private var errors: [Double] = []
@@ -48,12 +58,15 @@ final class GrowingNeuralGas {
     private var meanErrorHistory: [Double] = []
     private(set) var stoppedGrowing = false
 
-    private struct Edge: Hashable {
+    private struct Edge: Hashable, Comparable {
         let a: Int
         let b: Int
         init(_ x: Int, _ y: Int) {
             a = min(x, y)
             b = max(x, y)
+        }
+        static func < (lhs: Edge, rhs: Edge) -> Bool {
+            (lhs.a, lhs.b) < (rhs.a, rhs.b)
         }
     }
 
@@ -68,9 +81,13 @@ final class GrowingNeuralGas {
     var edgeCount: Int { edges.count }
     var edgeList: [(Int, Int)] { edges.map { ($0.a, $0.b) } }
 
-    func train(points: [CGPoint]) {
+    func train<RNG: RandomNumberGenerator>(points: [CGPoint], rng: inout RNG) {
         guard points.count >= 4 else { return }
-        initializeDistributedNodes(points: points, pairCount: max(1, min(config.numberOfStartingPoints, points.count / 4)))
+        initializeDistributedNodes(
+            points: points,
+            pairCount: max(1, min(config.numberOfStartingPoints, points.count / 4)),
+            rng: &rng
+        )
 
         for _ in 0..<config.maxEpochs {
             guard !positions.isEmpty else { break }
@@ -83,17 +100,31 @@ final class GrowingNeuralGas {
             var a2 = [Double](repeating: 0, count: positions.count)
             var coOccurrence = [[Int: Double]](repeating: [:], count: positions.count)
 
+            // Order doesn't matter here: every use below (position deltas,
+            // activation counts) is a commutative accumulation into
+            // per-index arrays, so Set's per-process iteration order can't
+            // change the numeric result.
             var neighborLists = [[Int]](repeating: [], count: positions.count)
             for edge in edges {
                 neighborLists[edge.a].append(edge.b)
                 neighborLists[edge.b].append(edge.a)
             }
 
+            // Rebuilt every epoch since node positions move each epoch;
+            // turns the dominant cost (nearest-two search × every sampled
+            // point) from O(nodes) into O(log nodes) per point.
+            let tree = KDTree(points: positions)
             var totalError: Double = 0
 
             for p in points {
-                let (s1, s2, d1) = nearestTwo(to: p)
+                let (s1, s2, squaredDist) = tree.nearestTwo(to: p)
                 guard s1 >= 0 else { continue }
+
+                // KDTree.nearestTwo returns squared distance; everything
+                // below that's compared against a linear-pixel threshold
+                // (stopError) or matches the reference algorithm's own use
+                // of linear distance for error accumulation needs the sqrt.
+                let d1 = squaredDist.squareRoot()
 
                 totalError += d1
                 errors[s1] += d1 * config.alpha
@@ -121,60 +152,50 @@ final class GrowingNeuralGas {
 
             edges = []
             for i in coOccurrence.indices {
+                // Dictionary iteration order is also per-process random, but
+                // this only feeds `edges.insert` (Set membership), which is
+                // order-independent, so no sorting needed here.
                 for (j, count) in coOccurrence[i] where count > 0 && j > i {
                     edges.insert(Edge(i, j))
                 }
             }
 
-            removeIsolatedNodes()
+            let isolationRemap = removeIsolatedNodes()
 
             for i in errors.indices { errors[i] *= config.errorDecayFactor }
 
-            if Double.random(in: 0..<1) < config.pruneChance {
-                let activated = a1
-                removeNodes(where: { $0 < activated.count && activated[$0] == 0 })
+            if Double.random(in: 0..<1, using: &rng) < config.pruneChance {
+                // `a1` is indexed by this epoch's *pre-isolation-removal*
+                // node numbering, but `positions`/`errors`/`edges` were just
+                // re-indexed by `removeIsolatedNodes`. Remap `a1` through
+                // the same mapping before using it, or this reads activation
+                // counts for the wrong nodes entirely.
+                var remappedActivation = [Double](repeating: 0, count: positions.count)
+                for (oldIndex, newIndex) in isolationRemap.enumerated() where newIndex >= 0 {
+                    remappedActivation[newIndex] = a1[oldIndex]
+                }
+                removeNodes(where: { remappedActivation[$0] == 0 })
             }
 
             addNewNodes()
 
             let meanError = points.isEmpty ? 0 : totalError / Double(points.count)
+            if meanError <= config.stopError {
+                stoppedGrowing = true
+                break
+            }
             if trackPlateau(meanError) { break }
         }
-    }
-
-    /// Returns squared distances (no `sqrt`) — this runs `points × nodes`
-    /// times per epoch, so avoiding the transcendental call matters a lot.
-    /// Every caller only needs relative ordering/thresholds, never the
-    /// literal distance, so squared units are fine throughout.
-    private func nearestTwo(to point: CGPoint) -> (Int, Int, Double) {
-        var bestDist = Double.infinity
-        var secondDist = Double.infinity
-        var s1 = -1
-        var s2 = -1
-
-        for i in positions.indices {
-            let dx = positions[i].x - point.x
-            let dy = positions[i].y - point.y
-            let d = dx * dx + dy * dy
-            if d < bestDist {
-                secondDist = bestDist
-                s2 = s1
-                bestDist = d
-                s1 = i
-            } else if d < secondDist {
-                secondDist = d
-                s2 = i
-            }
-        }
-        return (s1, s2, bestDist)
     }
 
     /// Seeds the graph with `pairCount` (node, neighbor) pairs spread across
     /// the data: each iteration picks a random seed from the remaining pool,
     /// pairs it with its 3rd-nearest point, then removes that local
     /// neighborhood from the pool before picking the next seed.
-    private func initializeDistributedNodes(points: [CGPoint], pairCount: Int) {
-        var pool = points.shuffled()
+    private func initializeDistributedNodes<RNG: RandomNumberGenerator>(
+        points: [CGPoint], pairCount: Int, rng: inout RNG
+    ) {
+        var pool = points.shuffled(using: &rng)
         positions = []
         errors = []
         edges = []
@@ -185,7 +206,7 @@ final class GrowingNeuralGas {
             guard pool.count > batchSize + 2 else { break }
 
             let tailStart = max(0, pool.count - batchSize)
-            let seedIndex = Int.random(in: tailStart..<pool.count)
+            let seedIndex = Int.random(in: tailStart..<pool.count, using: &rng)
             let seed = pool[seedIndex]
 
             let sortedIndices = pool.indices.sorted {
@@ -219,23 +240,30 @@ final class GrowingNeuralGas {
         return dx * dx + dy * dy
     }
 
-    private func removeIsolatedNodes() {
+    /// Returns the old-index → new-index remap (-1 for removed nodes) so
+    /// callers can keep any epoch-local per-node arrays (like `a1`/`a2`) in
+    /// sync, the same way the reference implementation re-indexes its own
+    /// activation arrays whenever it deletes nodes.
+    @discardableResult
+    private func removeIsolatedNodes() -> [Int] {
         var degree = [Int](repeating: 0, count: positions.count)
         for edge in edges {
             degree[edge.a] += 1
             degree[edge.b] += 1
         }
-        removeNodes(where: { degree[$0] == 0 })
+        return removeNodes(where: { degree[$0] == 0 })
     }
 
     /// Removes every node matching `predicate` in one pass. Rebuilds
     /// positions/errors/edges exactly once regardless of how many nodes are
     /// removed — removing them one at a time would rebuild the whole edge
     /// set per removal, which gets quadratic when many nodes are isolated
-    /// in the same epoch.
-    private func removeNodes(where predicate: (Int) -> Bool) {
+    /// in the same epoch. Returns the old-index → new-index remap (-1 for
+    /// removed nodes); an identity mapping if nothing was removed.
+    @discardableResult
+    private func removeNodes(where predicate: (Int) -> Bool) -> [Int] {
         let toRemove = Set(positions.indices.filter(predicate))
-        guard !toRemove.isEmpty else { return }
+        guard !toRemove.isEmpty else { return Array(positions.indices) }
 
         var remap = [Int](repeating: -1, count: positions.count)
         var newPositions: [CGPoint] = []
@@ -255,6 +283,7 @@ final class GrowingNeuralGas {
             guard !toRemove.contains(edge.a), !toRemove.contains(edge.b) else { return nil }
             return Edge(remap[edge.a], remap[edge.b])
         })
+        return remap
     }
 
     /// Splits every node whose error is above `insertionQuantile`, inserting
@@ -266,8 +295,13 @@ final class GrowingNeuralGas {
         let threshold = sortedErrors[quantileIndex]
         let insertionBudget = min(config.maxInsertionsPerEpoch, errors.filter { $0 > threshold }.count)
 
+        // Sorted so tie-breaks in the `max(by:)` calls below are
+        // deterministic regardless of Set's per-process iteration order —
+        // this is the one place that order could change which node is
+        // picked when two neighbors have exactly equal error (most likely
+        // right after a split, where both halves get the same halved value).
         var neighborLists = [[Int]](repeating: [], count: positions.count)
-        for edge in edges {
+        for edge in edges.sorted() {
             neighborLists[edge.a].append(edge.b)
             neighborLists[edge.b].append(edge.a)
         }

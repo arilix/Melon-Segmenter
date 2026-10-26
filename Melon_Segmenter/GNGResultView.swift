@@ -1,27 +1,37 @@
 import SwiftUI
 
-/// Runs the Growing Neural Gas net-texture analysis on a segmented melon
-/// cutout, then shows the visualization + complexity metrics with an upload
-/// action. Mirrors `SegmentationView`'s self-contained async-stage pattern.
+/// Runs the area-normalized net-density analysis on a segmented melon
+/// cutout, then shows the 6-panel debug breakdown (segmentation, grayscale,
+/// blur, binary data mask, pruned GNG graph, metrics summary) with an
+/// upload action. Mirrors `SegmentationView`'s self-contained async-stage
+/// pattern.
 struct GNGResultView: View {
     let originalImage: UIImage
     let segmentedImage: UIImage
-    var onUpload: (NetComplexityMetrics, UIImage) -> Void
+    var onUpload: (NetDensityMetrics, UIImage) -> Void
     var onRetake: () -> Void
+
+    @AppStorage("melon.invertPolarity") private var invertPolarity = false
 
     @State private var isAnalyzing = true
     @State private var errorMessage: String?
-    @State private var metrics: NetComplexityMetrics?
-    @State private var visualization: UIImage?
+    @State private var metrics: NetDensityMetrics?
+    @State private var visualization: NetDensityVisualization?
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+    ]
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             if isAnalyzing {
                 Spacer()
                 ProgressView()
                     .tint(MelonTheme.accentTeal)
                     .scaleEffect(1.6)
-                Text("Menganalisis net melon dengan GNG…")
+                Text("Analyzing net density…")
                     .font(.headline)
                     .foregroundStyle(.white.opacity(0.85))
                     .multilineTextAlignment(.center)
@@ -40,75 +50,126 @@ struct GNGResultView: View {
                 Button {
                     onRetake()
                 } label: {
-                    Label("Ambil Ulang", systemImage: "arrow.counterclockwise")
+                    Label("Retake", systemImage: "arrow.counterclockwise")
                 }
                 .buttonStyle(MelonSecondaryButtonStyle())
             } else if let metrics, let visualization {
-                Image(uiImage: visualization)
-                    .resizable()
-                    .scaledToFit()
-                    .melonCard(padding: 8)
-                    .layoutPriority(1)
-
-                VStack(spacing: 6) {
-                    Text("Net Complexity Index")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.6))
-                    Text(String(format: "%.1f", metrics.netComplexityIndex))
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(MelonTheme.accentTeal)
-
-                    HStack(spacing: 20) {
-                        metricColumn(label: "Node", value: "\(metrics.nodeCount)")
-                        metricColumn(label: "Edge", value: "\(metrics.edgeCount)")
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 10) {
+                        imagePanel(number: 1, title: "Segmentation", image: visualization.segmentation)
+                        imagePanel(number: 2, title: "Grayscale", image: visualization.grayscale)
+                        imagePanel(number: 3, title: "Gaussian blur", image: visualization.blur)
+                        imagePanel(number: 4, title: "Binary = graph data", image: visualization.binary)
+                        imagePanel(number: 5, title: "GNG (pruned)", image: visualization.gngOverlay)
+                        metricsPanel(metrics)
                     }
+                    .padding(.vertical, 4)
+
+                    Toggle("Net is lighter than skin", isOn: $invertPolarity)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .tint(MelonTheme.accentTeal)
+                        .onChange(of: invertPolarity) { _, _ in rerun() }
+                        .padding(.top, 8)
                 }
-                .melonCard(padding: 12)
-                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
 
                 HStack(spacing: 12) {
                     Button {
                         onRetake()
                     } label: {
-                        Label("Ambil Ulang", systemImage: "arrow.counterclockwise")
+                        Label("Retake", systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(MelonSecondaryButtonStyle())
 
                     Button {
-                        onUpload(metrics, visualization)
+                        onUpload(metrics, visualization.gngOverlay)
                     } label: {
-                        Label("Upload Semua", systemImage: "icloud.and.arrow.up.fill")
+                        Label("Upload All", systemImage: "icloud.and.arrow.up.fill")
                     }
                     .buttonStyle(MelonPrimaryButtonStyle())
                 }
             }
         }
-        .padding(.bottom, 12)
+        .padding(.bottom, 8)
         .task {
             await runAnalysis()
         }
     }
 
-    private func metricColumn(label: String, value: String) -> some View {
-        VStack(spacing: 1) {
-            Text(value)
-                .font(.subheadline.bold())
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.6))
+    private func imagePanel(number: Int, title: String, image: UIImage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(number) \(title)")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+                .background(Color.black.opacity(0.25))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    private func metricsPanel(_ metrics: NetDensityMetrics) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("6 Metrics")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.7))
+
+            VStack(alignment: .leading, spacing: 4) {
+                densityRow(label: "Branch density", value: metrics.branchDensity)
+                densityRow(label: "Length density", value: metrics.lengthDensity)
+
+                Divider().background(Color.white.opacity(0.15))
+
+                Text("Data: \(polarityLabel(metrics)) (\(String(format: "%.1f", metrics.dataFractionOfROI * 100))% of ROI)")
+                Text("Stroke width \(String(format: "%.1f", metrics.strokeWidthPx))px, diameter \(Int(metrics.dEq))px")
+                Text("Color Lab: \(String(format: "%.1f", metrics.meanL)) / \(String(format: "%.1f", metrics.meanA)) / \(String(format: "%.1f", metrics.meanB))")
+                Text("GNG: \(metrics.nodeCount) nodes, \(metrics.prunedEdgeCount) pruned edges")
+            }
+            .font(.system(size: 10))
+            .foregroundStyle(.white.opacity(0.75))
+        }
+        .frame(maxWidth: .infinity, minHeight: 0, alignment: .topLeading)
+        .padding(8)
+        .aspectRatio(1, contentMode: .fit)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func densityRow(label: String, value: Double) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.white.opacity(0.75))
+            Spacer()
+            Text(String(format: "%.2f", value))
+                .bold()
+                .foregroundStyle(MelonTheme.accentTeal)
+        }
+        .font(.system(size: 11))
+    }
+
+    private func polarityLabel(_ metrics: NetDensityMetrics) -> String {
+        metrics.invertPolarity ? "net lighter than skin" : "net darker than skin"
     }
 
     private func runAnalysis() async {
+        isAnalyzing = true
+        errorMessage = nil
         do {
-            let result = try await NetComplexityAnalyzer.analyze(segmentedImage: segmentedImage)
+            let result = try await NetDensityAnalyzer.analyze(segmentedImage: segmentedImage, invertPolarity: invertPolarity)
             metrics = result.metrics
             visualization = result.visualization
         } catch {
-            errorMessage = "Gagal menganalisis: \(error.localizedDescription)"
+            errorMessage = "Analysis failed: \(error.localizedDescription)"
         }
         isAnalyzing = false
+    }
+
+    private func rerun() {
+        Task { await runAnalysis() }
     }
 }

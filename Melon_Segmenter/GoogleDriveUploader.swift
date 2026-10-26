@@ -4,13 +4,16 @@ import GoogleSignIn
 enum GoogleDriveUploaderError: LocalizedError {
     case invalidServerResponse
     case uploadFailed(statusCode: Int, message: String)
+    case driveScopeNotGranted
 
     var errorDescription: String? {
         switch self {
         case .invalidServerResponse:
-            return "Respons server Google Drive tidak valid."
+            return "Invalid response from the Google Drive server."
         case .uploadFailed(let statusCode, let message):
-            return "Upload gagal (HTTP \(statusCode)): \(message)"
+            return "Upload failed (HTTP \(statusCode)): \(message)"
+        case .driveScopeNotGranted:
+            return "Google didn't grant Drive access for this account. In Google Cloud Console, check that the Drive API is enabled and that this Google account is added as a test user on the OAuth consent screen, then try again."
         }
     }
 }
@@ -22,46 +25,60 @@ enum GoogleDriveUploaderError: LocalizedError {
 final class GoogleDriveUploader {
     static let driveFileScope = "https://www.googleapis.com/auth/drive.file"
     private static let rootFolderName = "Melon Segmenter"
-    private static let complexityLogFileName = "complexity_log.csv"
+    private static let densityLogFileName = "density_log.csv"
 
+    /// Signs in (or reuses the current session), requesting the Drive scope
+    /// if it isn't already granted. Explicitly re-checks `grantedScopes`
+    /// afterwards rather than trusting the sign-in call to have succeeded —
+    /// if the Google account isn't added as a test user on the OAuth
+    /// consent screen (or the Drive API isn't enabled), Google silently
+    /// completes sign-in without the scope instead of failing here, and the
+    /// first sign of trouble would otherwise be an opaque 403 from the
+    /// upload request itself.
     private func ensureSignedIn(presentingViewController: UIViewController) async throws -> GIDGoogleUser {
-        if let user = GIDSignIn.sharedInstance.currentUser,
-           user.grantedScopes?.contains(Self.driveFileScope) == true {
-            return user
-        }
-
-        if let currentUser = GIDSignIn.sharedInstance.currentUser {
+        let user: GIDGoogleUser
+        if let currentUser = GIDSignIn.sharedInstance.currentUser,
+           currentUser.grantedScopes?.contains(Self.driveFileScope) == true {
+            user = currentUser
+        } else if let currentUser = GIDSignIn.sharedInstance.currentUser {
             let result = try await currentUser.addScopes(
                 [Self.driveFileScope],
                 presenting: presentingViewController
             )
-            return result.user
+            user = result.user
+        } else {
+            let result = try await GIDSignIn.sharedInstance.signIn(
+                withPresenting: presentingViewController,
+                hint: nil,
+                additionalScopes: [Self.driveFileScope]
+            )
+            user = result.user
         }
 
-        let result = try await GIDSignIn.sharedInstance.signIn(
-            withPresenting: presentingViewController,
-            hint: nil,
-            additionalScopes: [Self.driveFileScope]
-        )
-        return result.user
+        guard user.grantedScopes?.contains(Self.driveFileScope) == true else {
+            throw GoogleDriveUploaderError.driveScopeNotGranted
+        }
+        return user
     }
 
     /// Uploads one capture's full artifact set into "Melon Segmenter/<dd_MM_yyyy>/"
-    /// and appends a row to the cumulative "complexity_log.csv" at the root.
+    /// and appends a row to the cumulative "density_log.csv" at the root.
     func uploadCaptureBundle(
         captureIndex: String,
         originalPNGData: Data,
         segmentedPNGData: Data,
         visualizationPNGData: Data,
-        metrics: NetComplexityMetrics,
+        metrics: NetDensityMetrics,
         presentingViewController: UIViewController
     ) async throws {
         let user = try await ensureSignedIn(presentingViewController: presentingViewController)
         let token = user.accessToken.tokenString
 
+        let now = Date()
         let rootFolderId = try await findOrCreateFolder(named: Self.rootFolderName, parentId: nil, token: token)
-        let dateString = Self.dateFolderName()
-        let dateFolderId = try await findOrCreateFolder(named: dateString, parentId: rootFolderId, token: token)
+        let folderDateString = Self.dateFolderName(from: now)
+        let dateFolderId = try await findOrCreateFolder(named: folderDateString, parentId: rootFolderId, token: token)
+        let timestampString = Self.timestampString(from: now)
 
         let safeIndex = captureIndex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "unindexed-\(Int(Date().timeIntervalSince1970))"
@@ -91,10 +108,19 @@ final class GoogleDriveUploader {
 
         let metricsJSON: [String: Any] = [
             "captureIndex": safeIndex,
-            "date": dateString,
+            "date": timestampString,
+            "polarity": metrics.invertPolarity ? "light" : "dark",
             "nodeCount": metrics.nodeCount,
-            "edgeCount": metrics.edgeCount,
-            "netComplexityIndex": metrics.netComplexityIndex,
+            "prunedEdgeCount": metrics.prunedEdgeCount,
+            "roiAreaPx": metrics.roiAreaPx,
+            "branchDensity": metrics.branchDensity,
+            "lengthDensity": metrics.lengthDensity,
+            "dataFractionOfROI": metrics.dataFractionOfROI,
+            "strokeWidthPx": metrics.strokeWidthPx,
+            "dEq": metrics.dEq,
+            "meanL": metrics.meanL,
+            "meanA": metrics.meanA,
+            "meanB": metrics.meanB,
         ]
         let metricsData = try JSONSerialization.data(withJSONObject: metricsJSON, options: [.prettyPrinted])
         _ = try await uploadFile(
@@ -105,9 +131,9 @@ final class GoogleDriveUploader {
             token: token
         )
 
-        try await appendComplexityLogRow(
+        try await appendDensityLogRow(
             captureIndex: safeIndex,
-            dateString: dateString,
+            dateString: timestampString,
             metrics: metrics,
             rootFolderId: rootFolderId,
             token: token
@@ -147,25 +173,29 @@ final class GoogleDriveUploader {
         return try JSONDecoder().decode(CreateResponse.self, from: createData).id
     }
 
-    /// Finds-or-creates "complexity_log.csv" under `rootFolderId` and appends one row.
-    private func appendComplexityLogRow(
+    /// Finds-or-creates "density_log.csv" under `rootFolderId` and appends
+    /// one row. Deliberately a different file from the old
+    /// "complexity_log.csv" — the schema is unrelated, so appending would
+    /// have shifted every column.
+    private func appendDensityLogRow(
         captureIndex: String,
         dateString: String,
-        metrics: NetComplexityMetrics,
+        metrics: NetDensityMetrics,
         rootFolderId: String,
         token: String
     ) async throws {
-        let header = "capture_index,date,node_count,edge_count,net_complexity_index\n"
-        let newRow = "\(csvEscape(captureIndex)),\(dateString),\(metrics.nodeCount),\(metrics.edgeCount),\(metrics.netComplexityIndex)\n"
+        let header = "capture_index,date,polarity,node_count,pruned_edge_count,roi_area_px,branch_density,length_density,data_fraction_of_roi,stroke_width_px,d_eq,mean_l,mean_a,mean_b\n"
+        let polarity = metrics.invertPolarity ? "light" : "dark"
+        let newRow = "\(csvEscape(captureIndex)),\(dateString),\(polarity),\(metrics.nodeCount),\(metrics.prunedEdgeCount),\(metrics.roiAreaPx),\(metrics.branchDensity),\(metrics.lengthDensity),\(metrics.dataFractionOfROI),\(metrics.strokeWidthPx),\(metrics.dEq),\(metrics.meanL),\(metrics.meanA),\(metrics.meanB)\n"
 
-        let query = "name = '\(escaped(Self.complexityLogFileName))' and trashed = false and '\(rootFolderId)' in parents"
+        let query = "name = '\(escaped(Self.densityLogFileName))' and trashed = false and '\(rootFolderId)' in parents"
         if let existingId = try await findFile(query: query, token: token) {
             let currentContent = try await downloadTextFile(fileId: existingId, token: token)
             try await updateFileContent(fileId: existingId, content: currentContent + newRow, mimeType: "text/csv", token: token)
         } else {
             _ = try await uploadFile(
                 data: Data((header + newRow).utf8),
-                fileName: Self.complexityLogFileName,
+                fileName: Self.densityLogFileName,
                 mimeType: "text/csv",
                 parentId: rootFolderId,
                 token: token
@@ -248,10 +278,21 @@ final class GoogleDriveUploader {
         return try JSONDecoder().decode(UploadResponse.self, from: responseData).id
     }
 
-    private static func dateFolderName() -> String {
+    /// Day-only — used for the Drive subfolder name, so captures from the
+    /// same day keep landing in the same folder.
+    private static func dateFolderName(from date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "dd_MM_yyyy"
-        return formatter.string(from: Date())
+        return formatter.string(from: date)
+    }
+
+    /// Day + time — used for the "date" value recorded in the metrics
+    /// JSON/CSV, so multiple captures on the same day (e.g. testing the
+    /// same melon a few times) can still be told apart.
+    private static func timestampString(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd_MM_yyyy HH:mm:ss"
+        return formatter.string(from: date)
     }
 
     private static func multipartBody(data: Data, fileName: String, mimeType: String, boundary: String, parentId: String) -> Data {

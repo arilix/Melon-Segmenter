@@ -9,18 +9,51 @@ enum MelonSegmenterError: Error {
 
 /// Wraps SamKit's MobileSAM session to turn a tap point on a photo into a
 /// cropped, transparent-background cutout of the tapped object.
-/// Not thread-safe for concurrent calls; the caller is expected to run one
-/// segmentation at a time (e.g. from a single background Task).
-final class MelonSegmenter {
+///
+/// An `actor` rather than a plain class: this serializes access
+/// automatically (satisfying the original "not thread-safe for concurrent
+/// calls" requirement) *and* moves execution off the main actor by default.
+/// As a plain class called from a non-detached `Task { }` inside a
+/// MainActor-isolated SwiftUI view, SAM's synchronous CoreML inference ran
+/// on the main thread and blocked the UI; an actor's isolated methods run on
+/// its own executor instead.
+actor MelonSegmenter {
     private var session: SamSession?
 
+    /// Identity + downscaled-CGImage cache, keyed on the caller's original
+    /// `UIImage` reference. Retrying a tap on the *same* photo (e.g. the
+    /// SegmentationView "Try Again" button) previously re-ran `setImage`
+    /// every time, needlessly re-encoding with the heavy ViT encoder.
+    private var cachedImage: UIImage?
+    private var cachedCGImage: CGImage?
+    private var cachedScale: CGFloat = 1.0
+
+    /// Longest-side cap applied before handing a photo to SAM. Cuts encoder
+    /// latency substantially on A15; verify on-device that the resulting
+    /// mask is visually unchanged before relying on this.
+    private static let maxLongSide: CGFloat = 2048
+
     func segment(image: UIImage, tapPoint: CGPoint) throws -> UIImage {
-        guard let cgImage = image.cgImage else { throw MelonSegmenterError.cgImageUnavailable }
-
         let session = try loadedSession()
-        try session.setImage(cgImage)
 
-        let point = SamPoint(x: tapPoint.x, y: tapPoint.y, label: .positive)
+        let cgImage: CGImage
+        let scale: CGFloat
+        if cachedImage === image, let existingCGImage = cachedCGImage {
+            cgImage = existingCGImage
+            scale = cachedScale
+        } else {
+            let (scaledImage, computedScale) = Self.downscaledIfNeeded(image)
+            guard let scaledCGImage = scaledImage.cgImage else { throw MelonSegmenterError.cgImageUnavailable }
+            try session.setImage(scaledCGImage)
+            cachedImage = image
+            cachedCGImage = scaledCGImage
+            cachedScale = computedScale
+            cgImage = scaledCGImage
+            scale = computedScale
+        }
+
+        let scaledTapPoint = CGPoint(x: tapPoint.x * scale, y: tapPoint.y * scale)
+        let point = SamPoint(x: scaledTapPoint.x, y: scaledTapPoint.y, label: .positive)
         let result = try session.predict(points: [point])
 
         guard let mask = result.masks.first else {
@@ -39,6 +72,25 @@ final class MelonSegmenter {
         let newSession = try SamSession(model: .bundled(.mobileSam), config: .bestAvailable)
         session = newSession
         return newSession
+    }
+
+    /// Returns `image` unchanged (scale 1.0) if its longest side is already
+    /// within `maxLongSide`, otherwise a downscaled copy and the scale
+    /// factor applied (so callers can map prompt coordinates accordingly).
+    private static func downscaledIfNeeded(_ image: UIImage) -> (UIImage, CGFloat) {
+        let longSide = max(image.size.width, image.size.height)
+        guard longSide > maxLongSide else { return (image, 1.0) }
+
+        let scale = maxLongSide / longSide
+        let newSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        let scaledImage = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+        return (scaledImage, scale)
     }
 
     /// Draws `cgImage` clipped to `maskCGImage`, producing an image with

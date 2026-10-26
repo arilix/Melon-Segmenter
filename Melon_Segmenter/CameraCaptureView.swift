@@ -41,7 +41,7 @@ struct CameraCaptureView: UIViewControllerRepresentable {
     }
 }
 
-private extension UIImage {
+extension UIImage {
     /// Camera photos carry a non-`.up` `imageOrientation` (the pixel buffer
     /// is stored rotated, with metadata saying how to display it).
     /// Downstream code (segmentation, GNG analysis) reads raw pixel bytes
