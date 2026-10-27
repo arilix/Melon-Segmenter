@@ -60,11 +60,8 @@ actor MelonSegmenter {
             throw MelonSegmenterError.noMask
         }
 
-        print("[MS] mask \(mask.width)x\(mask.height) alpha=\(mask.alpha.count) score=\(mask.score) maxAlpha=\(mask.alpha.max() ?? 0) nonzero=\(mask.alpha.reduce(0) { $0 + ($1 > 127 ? 1 : 0) })")
         let cutout = try Self.applyMask(mask, to: cgImage)
-        print("[MS] applyMask done \(cutout.width)x\(cutout.height)")
         let cropped = Self.cropToOpaqueBounds(cutout)
-        print("[MS] crop done \(cropped == nil ? "nil" : "ok")")
         return cropped ?? UIImage(cgImage: cutout)
     }
 

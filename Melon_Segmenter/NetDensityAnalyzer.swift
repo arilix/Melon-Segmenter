@@ -119,6 +119,9 @@ enum NetDensityAnalyzer {
         }.value
     }
 
+    /// Per-stage timing logs; off by default.
+    private static let timingLogsEnabled = false
+
     private static func performAnalysis(
         segmentedImage: UIImage,
         invertPolarity: Bool,
@@ -128,7 +131,7 @@ enum NetDensityAnalyzer {
         var lastInstant = clock.now
         func lap(_ label: String) {
             let now = clock.now
-            print("[NetDensityAnalyzer] \(label): \(now - lastInstant)")
+            if Self.timingLogsEnabled { print("[NetDensityAnalyzer] \(label): \(now - lastInstant)") }
             lastInstant = now
         }
 
