@@ -49,8 +49,18 @@ struct NetDensityVisualization {
     let blur: UIImage
     /// Panel 4: the binary "data" mask (net pixels) inside the ROI.
     let binary: UIImage
-    /// Panel 5: the triangle-pruned GNG graph overlaid on the cutout.
-    let gngOverlay: UIImage
+    /// Panel 4 inputs, kept so the net pixels can be drawn thicker for
+    /// display without re-running the analysis (metrics are unaffected).
+    let binaryData: [Bool]
+    let binaryROI: [Bool]
+    let binaryMask: [Bool]
+    let pixelWidth: Int
+    let pixelHeight: Int
+    /// The cutout and pruned graph behind panel 5, kept so the overlay can
+    /// be re-drawn at another edge thickness without re-running the GNG.
+    let graphBase: UIImage
+    let graphPositions: [CGPoint]
+    let graphEdges: [(Int, Int)]
 }
 
 enum NetDensityAnalyzerError: LocalizedError {
@@ -254,12 +264,14 @@ enum NetDensityAnalyzer {
             grayscale: renderGrayscaleImage(gray, mask: mask, width: width, height: height),
             blur: renderGrayscaleImage(smallBlur, mask: mask, width: width, height: height),
             binary: renderBinaryImage(data: data_, roi: roi, mask: mask, width: width, height: height),
-            gngOverlay: renderVisualization(
-                baseImage: baseImage,
-                pixelSize: pixelSize,
-                positions: gng.positions,
-                edges: prunedEdgeList
-            )
+            binaryData: data_,
+            binaryROI: roi,
+            binaryMask: mask,
+            pixelWidth: width,
+            pixelHeight: height,
+            graphBase: baseImage,
+            graphPositions: gng.positions,
+            graphEdges: prunedEdgeList
         )
         lap("visualization")
 
@@ -590,18 +602,48 @@ enum NetDensityAnalyzer {
         return imageFromRGBA(pixels, width: width, height: height)
     }
 
+    /// Panel 4 with the net pixels grown by `radius` px (display only).
+    static func renderBinary(_ visualization: NetDensityVisualization, radius: Int) -> UIImage {
+        guard radius > 0 else { return visualization.binary }
+        let width = visualization.pixelWidth
+        let height = visualization.pixelHeight
+        let source = visualization.binaryData
+
+        // Separable box dilation: horizontal pass, then vertical.
+        var horizontal = [Bool](repeating: false, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width where source[y * width + x] {
+                for dx in max(0, x - radius)...min(width - 1, x + radius) {
+                    horizontal[y * width + dx] = true
+                }
+            }
+        }
+        var dilated = [Bool](repeating: false, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width where horizontal[y * width + x] {
+                for dy in max(0, y - radius)...min(height - 1, y + radius) {
+                    dilated[dy * width + x] = true
+                }
+            }
+        }
+        return renderBinaryImage(data: dilated, roi: visualization.binaryROI, mask: visualization.binaryMask, width: width, height: height)
+    }
+
     /// Single panel, scale 1: the normalized cutout with the triangle-pruned
     /// graph overlaid. Sizes scale with the image so the graph stays readable
     /// when the panel is shown shrunk. Only edges are drawn (no node dots), as
     /// red lines with a dark outline for contrast.
-    private static func renderVisualization(
-        baseImage: UIImage, pixelSize: CGSize, positions: [CGPoint], edges: [(Int, Int)]
-    ) -> UIImage {
+    /// `thickness` is a multiplier on the default line width (1.0 = default).
+    static func renderGNGOverlay(_ visualization: NetDensityVisualization, thickness: CGFloat) -> UIImage {
+        let baseImage = visualization.graphBase
+        let positions = visualization.graphPositions
+        let edges = visualization.graphEdges
+        let pixelSize = baseImage.size
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let renderer = UIGraphicsImageRenderer(size: pixelSize, format: format)
 
-        let unit = max(1.0, max(pixelSize.width, pixelSize.height) / 300)
+        let unit = max(1.0, max(pixelSize.width, pixelSize.height) / 300) * thickness
         let edgeColor = UIColor(red: 1.0, green: 0.15, blue: 0.15, alpha: 1.0)
 
         return renderer.image { rendererContext in

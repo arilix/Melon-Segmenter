@@ -3,7 +3,7 @@ import Foundation
 
 /// Tuning parameters for the DBL-GNG engine below.
 struct GNGConfig {
-    var maxNodes: Int = 1200
+    var maxNodes: Int = 2000
     /// L1 in the reference implementation: winner-node learning rate.
     var alpha: Double = 0.5
     /// L2 in the reference implementation: neighbor-node learning rate.
@@ -30,7 +30,7 @@ struct GNGConfig {
     /// input points: once the mean distance from sampled points to their
     /// nearest node drops to/below this, stop growing — checked in addition
     /// to (not instead of) the relative plateau check above.
-    var stopError: Double = 2.5
+    var stopError: Double = 1.5
 }
 
 /// Swift port of **DBL-GNG** (Distributed Batch Learning Growing Neural Gas,
