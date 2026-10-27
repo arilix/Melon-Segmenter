@@ -12,11 +12,16 @@ struct GNGResultView: View {
     var onRetake: () -> Void
 
     @AppStorage("melon.invertPolarity") private var invertPolarity = false
+    @AppStorage("melon.edgeThicknessScale") private var edgeThickness = 1.0
+    @AppStorage("melon.dataThickness") private var dataThickness = 0.0
 
     @State private var isAnalyzing = true
     @State private var errorMessage: String?
     @State private var metrics: NetDensityMetrics?
     @State private var visualization: NetDensityVisualization?
+    @State private var gngOverlay: UIImage?
+    @State private var binaryImage: UIImage?
+    @State private var selectedPanel: Int? = 5
 
     private let columns = [
         GridItem(.flexible(), spacing: 8),
@@ -59,11 +64,14 @@ struct GNGResultView: View {
                         imagePanel(number: 1, title: "Segmentation", image: visualization.segmentation)
                         imagePanel(number: 2, title: "Grayscale", image: visualization.grayscale)
                         imagePanel(number: 3, title: "Gaussian blur", image: visualization.blur)
-                        imagePanel(number: 4, title: "Binary = graph data", image: visualization.binary)
-                        imagePanel(number: 5, title: "GNG (pruned)", image: visualization.gngOverlay)
+                        imagePanel(number: 4, title: "Binary = graph data", image: binaryImage ?? visualization.binary)
+                        imagePanel(number: 5, title: "GNG (pruned)", image: gngOverlay ?? visualization.graphBase)
                         metricsPanel(metrics)
                     }
                     .padding(.vertical, 4)
+
+                    thicknessControl
+                        .padding(.top, 8)
 
                     Toggle("Net is lighter than skin", isOn: $invertPolarity)
                         .font(.caption)
@@ -83,7 +91,7 @@ struct GNGResultView: View {
                     .buttonStyle(MelonSecondaryButtonStyle())
 
                     Button {
-                        onUpload(metrics, visualization.gngOverlay)
+                        onUpload(metrics, gngOverlay ?? visualization.graphBase)
                     } label: {
                         Label("Upload All", systemImage: "icloud.and.arrow.up.fill")
                     }
@@ -111,7 +119,46 @@ struct GNGResultView: View {
                 .aspectRatio(1, contentMode: .fit)
                 .background(Color.black.opacity(0.25))
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(MelonTheme.accentTeal, lineWidth: selectedPanel == number ? 2.5 : 0)
+                )
+                .contentShape(Rectangle())
+                .onTapGesture { selectedPanel = number }
         }
+    }
+
+    /// Slider for whichever panel is selected. Only panels 4 (net pixels) and
+    /// 5 (graph edges) have a thickness; the others just show a hint.
+    @ViewBuilder
+    private var thicknessControl: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if selectedPanel == 5 {
+                Text("Panel 5 – edge thickness: \(String(format: "%.1f", edgeThickness))×")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.8))
+                Slider(value: $edgeThickness, in: 0.3...4.0)
+                    .tint(MelonTheme.accentTeal)
+                    .onChange(of: edgeThickness) { _, _ in redrawOverlay() }
+            } else if selectedPanel == 4 {
+                Text("Panel 4 – net pixel thickness: \(Int(dataThickness)) px")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.8))
+                Slider(value: $dataThickness, in: 0...6, step: 1)
+                    .tint(MelonTheme.accentTeal)
+                    .onChange(of: dataThickness) { _, _ in redrawBinary() }
+                Text("Display only – the metrics are not affected.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.5))
+            } else {
+                Text("Tap panel 4 or 5 to adjust its thickness.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private func metricsPanel(_ metrics: NetDensityMetrics) -> some View {
@@ -163,10 +210,22 @@ struct GNGResultView: View {
             let result = try await NetDensityAnalyzer.analyze(segmentedImage: segmentedImage, invertPolarity: invertPolarity)
             metrics = result.metrics
             visualization = result.visualization
+            redrawOverlay()
+            redrawBinary()
         } catch {
             errorMessage = "Analysis failed: \(error.localizedDescription)"
         }
         isAnalyzing = false
+    }
+
+    private func redrawOverlay() {
+        guard let visualization else { return }
+        gngOverlay = NetDensityAnalyzer.renderGNGOverlay(visualization, thickness: CGFloat(edgeThickness))
+    }
+
+    private func redrawBinary() {
+        guard let visualization else { return }
+        binaryImage = NetDensityAnalyzer.renderBinary(visualization, radius: Int(dataThickness))
     }
 
     private func rerun() {
