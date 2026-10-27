@@ -591,7 +591,9 @@ enum NetDensityAnalyzer {
     }
 
     /// Single panel, scale 1: the normalized cutout with the triangle-pruned
-    /// graph (red) overlaid. Replaces the old two-panel 2×-wide layout.
+    /// graph overlaid. Sizes scale with the image so the graph stays readable
+    /// when the panel is shown shrunk. Only edges are drawn (no node dots), as
+    /// red lines with a dark outline for contrast.
     private static func renderVisualization(
         baseImage: UIImage, pixelSize: CGSize, positions: [CGPoint], edges: [(Int, Int)]
     ) -> UIImage {
@@ -599,27 +601,25 @@ enum NetDensityAnalyzer {
         format.scale = 1
         let renderer = UIGraphicsImageRenderer(size: pixelSize, format: format)
 
+        let unit = max(1.0, max(pixelSize.width, pixelSize.height) / 300)
+        let edgeColor = UIColor(red: 1.0, green: 0.15, blue: 0.15, alpha: 1.0)
+
         return renderer.image { rendererContext in
             baseImage.draw(in: CGRect(origin: .zero, size: pixelSize))
-
             let cgContext = rendererContext.cgContext
-            let graphColor = UIColor(red: 1.0, green: 0.15, blue: 0.15, alpha: 1.0)
+            cgContext.setLineCap(.round)
 
-            // Dots first, edges on top (short edges between close nodes
-            // would otherwise be fully covered by the larger dot markers).
-            cgContext.setFillColor(graphColor.cgColor)
-            let radius: CGFloat = 2.0
-            for p in positions {
-                cgContext.fillEllipse(in: CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2))
+            func strokeEdges(color: UIColor, width: CGFloat) {
+                cgContext.setStrokeColor(color.cgColor)
+                cgContext.setLineWidth(width)
+                for (a, b) in edges where a < positions.count && b < positions.count {
+                    cgContext.move(to: positions[a])
+                    cgContext.addLine(to: positions[b])
+                }
+                cgContext.strokePath()
             }
-
-            cgContext.setStrokeColor(graphColor.cgColor)
-            cgContext.setLineWidth(1.5)
-            for (a, b) in edges where a < positions.count && b < positions.count {
-                cgContext.move(to: positions[a])
-                cgContext.addLine(to: positions[b])
-            }
-            cgContext.strokePath()
+            strokeEdges(color: UIColor.black.withAlphaComponent(0.7), width: 3.0 * unit)
+            strokeEdges(color: edgeColor, width: 1.5 * unit)
         }
     }
 }

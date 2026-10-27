@@ -60,8 +60,12 @@ actor MelonSegmenter {
             throw MelonSegmenterError.noMask
         }
 
-        let cutout = try Self.applyMask(mask.cgImage, to: cgImage)
-        return Self.cropToOpaqueBounds(cutout) ?? UIImage(cgImage: cutout)
+        print("[MS] mask \(mask.width)x\(mask.height) alpha=\(mask.alpha.count) score=\(mask.score) maxAlpha=\(mask.alpha.max() ?? 0) nonzero=\(mask.alpha.reduce(0) { $0 + ($1 > 127 ? 1 : 0) })")
+        let cutout = try Self.applyMask(mask, to: cgImage)
+        print("[MS] applyMask done \(cutout.width)x\(cutout.height)")
+        let cropped = Self.cropToOpaqueBounds(cutout)
+        print("[MS] crop done \(cropped == nil ? "nil" : "ok")")
+        return cropped ?? UIImage(cgImage: cutout)
     }
 
     private func loadedSession() throws -> SamSession {
@@ -69,7 +73,7 @@ actor MelonSegmenter {
         // MobileSAM's ImageEncoder/MaskDecoder .mlpackage files must be added
         // to the app target (see SamKit release assets) for `.bundled(.mobileSam)`
         // to resolve.
-        let newSession = try SamSession(model: .bundled(.mobileSam), config: .bestAvailable)
+        let newSession = try SamSession(model: .bundled(.mobileSam), config: RuntimeConfig(computeUnits: .gpuPreferred, enableFP16: true))
         session = newSession
         return newSession
     }
@@ -95,7 +99,26 @@ actor MelonSegmenter {
 
     /// Draws `cgImage` clipped to `maskCGImage`, producing an image with
     /// transparent pixels anywhere the mask is zero.
-    private static func applyMask(_ maskCGImage: CGImage, to cgImage: CGImage) throws -> CGImage {
+    private static func applyMask(_ mask: SamMask, to cgImage: CGImage) throws -> CGImage {
+        // `mask.cgImage` is a colored RGBA overlay, which CGContext.clip(to:mask:)
+        // can't use (it needs grayscale) and silently clips everything away.
+        // Build a proper DeviceGray mask from the raw alpha bytes instead.
+        guard mask.alpha.count >= mask.width * mask.height,
+              let provider = CGDataProvider(data: mask.alpha as CFData),
+              let maskCGImage = CGImage(
+                width: mask.width,
+                height: mask.height,
+                bitsPerComponent: 8,
+                bitsPerPixel: 8,
+                bytesPerRow: mask.width,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+                provider: provider,
+                decode: nil,
+                shouldInterpolate: true,
+                intent: .defaultIntent
+              ) else { throw MelonSegmenterError.renderFailed }
+
         let width = cgImage.width
         let height = cgImage.height
         let rect = CGRect(x: 0, y: 0, width: width, height: height)
