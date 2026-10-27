@@ -79,6 +79,7 @@ final class GoogleDriveUploader {
         let folderDateString = Self.dateFolderName(from: now)
         let dateFolderId = try await findOrCreateFolder(named: folderDateString, parentId: rootFolderId, token: token)
         let timestampString = Self.timestampString(from: now)
+        let fileStamp = Self.localFileStamp(from: now)
 
         let safeIndex = captureIndex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "unindexed-\(Int(Date().timeIntervalSince1970))"
@@ -86,21 +87,21 @@ final class GoogleDriveUploader {
 
         _ = try await uploadFile(
             data: originalPNGData,
-            fileName: "melon-\(safeIndex)-original.png",
+            fileName: "melon-\(safeIndex)-\(fileStamp)-original.png",
             mimeType: "image/png",
             parentId: dateFolderId,
             token: token
         )
         _ = try await uploadFile(
             data: segmentedPNGData,
-            fileName: "melon-\(safeIndex)-segmented.png",
+            fileName: "melon-\(safeIndex)-\(fileStamp)-segmented.png",
             mimeType: "image/png",
             parentId: dateFolderId,
             token: token
         )
         _ = try await uploadFile(
             data: visualizationPNGData,
-            fileName: "melon-\(safeIndex)-gng.png",
+            fileName: "melon-\(safeIndex)-\(fileStamp)-gng.png",
             mimeType: "image/png",
             parentId: dateFolderId,
             token: token
@@ -125,7 +126,7 @@ final class GoogleDriveUploader {
         let metricsData = try JSONSerialization.data(withJSONObject: metricsJSON, options: [.prettyPrinted])
         _ = try await uploadFile(
             data: metricsData,
-            fileName: "melon-\(safeIndex)-metrics.json",
+            fileName: "melon-\(safeIndex)-\(fileStamp)-metrics.json",
             mimeType: "application/json",
             parentId: dateFolderId,
             token: token
@@ -276,6 +277,16 @@ final class GoogleDriveUploader {
 
         struct UploadResponse: Decodable { let id: String }
         return try JSONDecoder().decode(UploadResponse.self, from: responseData).id
+    }
+
+    /// Local date + time, e.g. "20261027T194516" — appended to uploaded file
+    /// names so repeat uploads of the same capture index on the same day
+    /// get distinct names instead of piling up identically named files.
+    private static func localFileStamp(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss"
+        return formatter.string(from: date)
     }
 
     /// Day-only — used for the Drive subfolder name, so captures from the
