@@ -93,7 +93,6 @@ struct SegmentationView: View {
 
         errorMessage = nil
         isSegmenting = true
-        print("[SV] tap at \(imagePoint) image=\(originalImage.size) scale=\(originalImage.scale)")
 
         Task {
             do {
@@ -102,10 +101,8 @@ struct SegmentationView: View {
                 // blocking it.
                 segmentedImage = try await segmenter.segment(image: originalImage, tapPoint: imagePoint)
             } catch {
-                print("[SV] error \(error)")
                 errorMessage = "Segmentation failed: \(error.localizedDescription)"
             }
-            print("[SV] done, segmented=\(segmentedImage != nil)")
             isSegmenting = false
         }
     }
