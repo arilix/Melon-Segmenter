@@ -194,6 +194,34 @@ final class MelonStore: ObservableObject {
         return melon
     }
 
+    enum SortOrder {
+        case idAscending
+        case hstDescending
+        case newestFirst
+    }
+
+    /// Moves melons within the list; the order is saved as the custom order.
+    func moveMelons(fromOffsets source: IndexSet, toOffset destination: Int) {
+        let moving = source.sorted().map { melons[$0] }
+        let insertionIndex = destination - source.filter { $0 < destination }.count
+        for index in source.sorted(by: >) { melons.remove(at: index) }
+        melons.insert(contentsOf: moving, at: insertionIndex)
+        save()
+    }
+
+    /// Re-orders the list once; drag afterwards to fine-tune.
+    func sortMelons(by order: SortOrder) {
+        switch order {
+        case .idAscending:
+            melons.sort { $0.captureIndex.localizedStandardCompare($1.captureIndex) == .orderedAscending }
+        case .hstDescending:
+            melons.sort { $0.hst() > $1.hst() }
+        case .newestFirst:
+            melons.sort { $0.createdAt > $1.createdAt }
+        }
+        save()
+    }
+
     func melon(id: UUID) -> Melon? {
         melons.first { $0.id == id }
     }

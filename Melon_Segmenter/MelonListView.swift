@@ -35,6 +35,17 @@ struct MelonListView: View {
                     if !store.melons.isEmpty { EditButton() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    if store.melons.count > 1 {
+                        Menu {
+                            Button("By ID (A–Z, 1–9)") { store.sortMelons(by: .idAscending) }
+                            Button("By HST (highest first)") { store.sortMelons(by: .hstDescending) }
+                            Button("Newest added first") { store.sortMelons(by: .newestFirst) }
+                        } label: {
+                            Image(systemName: "arrow.up.arrow.down")
+                        }
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { isAddingMelon = true } label: {
                         Image(systemName: "plus")
                     }
@@ -119,6 +130,10 @@ struct MelonListView: View {
             // Edit mode shows the red delete buttons; the confirmation dialog still asks first.
             .onDelete { offsets in
                 if let i = offsets.first { melonPendingDelete = store.melons[i] }
+            }
+            // Drag handles appear in edit mode (the Edit button).
+            .onMove { source, destination in
+                store.moveMelons(fromOffsets: source, toOffset: destination)
             }
         }
         .scrollContentBackground(.hidden)
