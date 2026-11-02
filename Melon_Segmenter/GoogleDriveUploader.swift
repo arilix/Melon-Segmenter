@@ -5,16 +5,30 @@ enum GoogleDriveUploaderError: LocalizedError {
     case invalidServerResponse
     case uploadFailed(statusCode: Int, message: String)
     case driveScopeNotGranted
+    case sessionExpired
 
     var errorDescription: String? {
         switch self {
         case .invalidServerResponse:
             return "Invalid response from the Google Drive server."
         case .uploadFailed(let statusCode, let message):
-            return "Upload failed (HTTP \(statusCode)): \(message)"
+            return "Upload failed (HTTP \(statusCode)): \(Self.readableMessage(from: message))"
+        case .sessionExpired:
+            return "Your Google session has expired. Open Settings, sign out, then sign in again and retry. Your photo is still kept."
         case .driveScopeNotGranted:
             return "Google didn't grant Drive access for this account. In Google Cloud Console, check that the Drive API is enabled and that this Google account is added as a test user on the OAuth consent screen, then try again."
         }
+    }
+}
+
+extension GoogleDriveUploaderError {
+    /// Google's errors arrive as JSON; show just the human-readable message.
+    fileprivate static func readableMessage(from raw: String) -> String {
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = json["error"] as? [String: Any],
+              let message = error["message"] as? String else { return raw }
+        return message
     }
 }
 
@@ -70,6 +84,39 @@ final class GoogleDriveUploader {
     /// processed days later), and drive the folder, file names and the
     /// "date"/"hst" values recorded.
     func uploadCaptureBundle(
+        captureIndex: String,
+        hst: Int,
+        capturedAt: Date,
+        originalPNGData: Data,
+        segmentedPNGData: Data,
+        visualizationPNGData: Data,
+        metrics: NetDensityMetrics,
+        presentingViewController: UIViewController
+    ) async throws {
+        func attempt() async throws {
+            try await uploadOnce(
+                captureIndex: captureIndex, hst: hst, capturedAt: capturedAt,
+                originalPNGData: originalPNGData, segmentedPNGData: segmentedPNGData,
+                visualizationPNGData: visualizationPNGData, metrics: metrics,
+                presentingViewController: presentingViewController
+            )
+        }
+
+        do {
+            try await attempt()
+        } catch GoogleDriveUploaderError.uploadFailed(statusCode: 401, _) {
+            // The access token was rejected (typically expired). Refresh it and
+            // try once more; if Google still refuses, the user must sign in again.
+            _ = try? await GIDSignIn.sharedInstance.currentUser?.refreshTokensIfNeeded()
+            do {
+                try await attempt()
+            } catch GoogleDriveUploaderError.uploadFailed(statusCode: 401, _) {
+                throw GoogleDriveUploaderError.sessionExpired
+            }
+        }
+    }
+
+    private func uploadOnce(
         captureIndex: String,
         hst: Int,
         capturedAt: Date,

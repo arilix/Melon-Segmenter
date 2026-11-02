@@ -233,9 +233,13 @@ final class MelonStore: ObservableObject {
         return record
     }
 
+    /// Marks a photo as uploaded and deletes its file: once it's safely in
+    /// Drive there's no need to keep it on the device. The record stays so
+    /// the melon's history (date, HST) is still listed.
     func markUploaded(_ captureID: UUID) {
         guard let i = captures.firstIndex(where: { $0.id == captureID }) else { return }
         captures[i].status = .uploaded
+        removeFile(of: captures[i])
         save()
     }
 
@@ -279,6 +283,10 @@ final class MelonStore: ObservableObject {
               let library = try? JSONDecoder().decode(Library.self, from: data) else { return }
         melons = library.melons
         captures = library.captures
+        // Photos uploaded before files were auto-deleted: clean them up.
+        for capture in captures where capture.status == .uploaded {
+            removeFile(of: capture)
+        }
     }
 
     private func save() {

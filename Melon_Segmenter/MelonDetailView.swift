@@ -168,7 +168,7 @@ struct MelonDetailView: View {
                     .tint(MelonTheme.accentTeal)
                     .foregroundStyle(MelonTheme.navyDeep)
             case .uploaded:
-                Label("Uploaded", systemImage: "checkmark.circle.fill")
+                Label("Uploaded · photo removed", systemImage: "checkmark.circle.fill")
                     .font(.caption)
                     .foregroundStyle(MelonTheme.meadowGreen)
             }
@@ -208,6 +208,10 @@ private struct ThumbnailView: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
+            } else if capture.status == .uploaded {
+                Image(systemName: "checkmark.icloud.fill")
+                    .font(.title2)
+                    .foregroundStyle(MelonTheme.meadowGreen)
             }
         }
         .task(id: capture.id) {
