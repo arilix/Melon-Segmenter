@@ -4,11 +4,11 @@ import SwiftUI
 /// kept photos are still waiting to be processed.
 struct MelonListView: View {
     @EnvironmentObject private var store: MelonStore
-    @EnvironmentObject private var auth: AuthManager
+    @EnvironmentObject private var scheduleStore: ScheduleStore
 
     @State private var path: [UUID] = []
     @State private var isAddingMelon = false
-    @State private var isShowingAccount = false
+    @State private var isShowingSettings = false
     @State private var melonPendingDelete: Melon?
     @State private var processingQueue: ProcessingQueue?
 
@@ -27,8 +27,8 @@ struct MelonListView: View {
             .navigationDestination(for: UUID.self) { MelonDetailView(melonID: $0) }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { isShowingAccount = true } label: {
-                        Image(systemName: "person.crop.circle")
+                    Button { isShowingSettings = true } label: {
+                        Image(systemName: "gearshape")
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
@@ -43,8 +43,8 @@ struct MelonListView: View {
             .sheet(isPresented: $isAddingMelon) {
                 AddMelonView { melon in path.append(melon.id) }
             }
-            .sheet(isPresented: $isShowingAccount) {
-                AccountView()
+            .sheet(isPresented: $isShowingSettings) {
+                SettingsView()
             }
             .fullScreenCover(item: $processingQueue) { queue in
                 ProcessingQueueView(queue: queue) { processingQueue = nil }
@@ -87,7 +87,14 @@ struct MelonListView: View {
 
     private var list: some View {
         let waiting = store.captures.filter { $0.status == .pending }
+        let schedule = scheduleStore.schedule
         return List {
+            if schedule.isEnabled, schedule.isCaptureDay(Date()) {
+                Label("Today is a capture day · reminder at \(schedule.reminderDate(on: Date()).formatted(date: .omitted, time: .shortened))", systemImage: "calendar.badge.clock")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(MelonTheme.navyDeep)
+                    .listRowBackground(MelonTheme.limeGreen)
+            }
             if !waiting.isEmpty {
                 Button {
                     // Oldest first, across all melons.
