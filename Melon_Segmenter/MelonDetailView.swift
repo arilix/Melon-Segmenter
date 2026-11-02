@@ -12,7 +12,7 @@ struct MelonDetailView: View {
     @State private var isConfirmingDelete = false
     @State private var isShowingCamera = false
     @State private var pickerItem: PhotosPickerItem?
-    @State private var processingCapture: CaptureRecord?
+    @State private var processingQueue: ProcessingQueue?
     @State private var errorMessage: String?
 
     private static let dateFormatter: DateFormatter = {
@@ -44,13 +44,8 @@ struct MelonDetailView: View {
             )
             .ignoresSafeArea()
         }
-        .fullScreenCover(item: $processingCapture) { capture in
-            if let melon = store.melon(id: melonID), let image = store.image(for: capture) {
-                ProcessingFlowView(original: image, captureIndex: melon.captureIndex) { uploaded in
-                    if uploaded { store.markUploaded(capture.id) }
-                    processingCapture = nil
-                }
-            }
+        .fullScreenCover(item: $processingQueue) { queue in
+            ProcessingQueueView(queue: queue) { processingQueue = nil }
         }
         .onChange(of: pickerItem) { _, newItem in
             guard let newItem else { return }
@@ -99,6 +94,17 @@ struct MelonDetailView: View {
             }
 
             Section("Kept photos") {
+                let waiting = captures.filter { $0.status == .pending }
+                if waiting.count > 1 {
+                    Button {
+                        // Oldest first, so uploads follow the order the photos were taken.
+                        processingQueue = ProcessingQueue(captureIDs: waiting.reversed().map(\.id))
+                    } label: {
+                        Label("Process all waiting (\(waiting.count))", systemImage: "play.fill")
+                    }
+                    .buttonStyle(MelonSecondaryButtonStyle())
+                    .listRowBackground(Color.clear)
+                }
                 if captures.isEmpty {
                     Text("No photos yet. Photos you take are kept here and can be processed later.")
                         .font(.subheadline)
@@ -157,7 +163,7 @@ struct MelonDetailView: View {
 
             switch capture.status {
             case .pending:
-                Button("Process") { processingCapture = capture }
+                Button("Process") { processingQueue = ProcessingQueue(captureIDs: [capture.id]) }
                     .buttonStyle(.borderedProminent)
                     .tint(MelonTheme.accentTeal)
                     .foregroundStyle(MelonTheme.navyDeep)

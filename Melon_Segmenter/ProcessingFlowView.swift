@@ -14,14 +14,32 @@ struct ProcessingFlowView: View {
     }
 
     let captureIndex: String
+    let hst: Int
+    let capturedAt: Date
+    /// "2 of 5" when running through a queue.
+    var progress: String?
+    /// Label of the button shown after a successful upload.
+    var doneTitle = "Done"
     /// Called when the user leaves; `true` if the upload finished.
     var onClose: (_ uploaded: Bool) -> Void
 
     @State private var stage: Stage
     private let uploader = GoogleDriveUploader()
 
-    init(original: UIImage, captureIndex: String, onClose: @escaping (Bool) -> Void) {
+    init(
+        original: UIImage,
+        captureIndex: String,
+        hst: Int,
+        capturedAt: Date,
+        progress: String? = nil,
+        doneTitle: String = "Done",
+        onClose: @escaping (Bool) -> Void
+    ) {
         self.captureIndex = captureIndex
+        self.hst = hst
+        self.capturedAt = capturedAt
+        self.progress = progress
+        self.doneTitle = doneTitle
         self.onClose = onClose
         _stage = State(initialValue: .segmenting(original: original))
     }
@@ -32,6 +50,10 @@ struct ProcessingFlowView: View {
 
             VStack(spacing: 20) {
                 header
+
+                Text(subtitle)
+                    .font(.footnote.bold())
+                    .foregroundStyle(MelonTheme.accentTeal)
 
                 Group {
                     switch stage {
@@ -66,6 +88,11 @@ struct ProcessingFlowView: View {
             .padding(.top, 12)
         }
         .preferredColorScheme(.dark)
+    }
+
+    private var subtitle: String {
+        let base = "Melon \(captureIndex) · HST \(hst)"
+        return progress.map { "\(base) · photo \($0)" } ?? base
     }
 
     private var header: some View {
@@ -126,7 +153,7 @@ struct ProcessingFlowView: View {
             Button {
                 onClose(true)
             } label: {
-                Label("Done", systemImage: "checkmark")
+                Label(doneTitle, systemImage: "checkmark")
             }
             .buttonStyle(MelonPrimaryButtonStyle())
         }
@@ -176,6 +203,8 @@ struct ProcessingFlowView: View {
             do {
                 try await uploader.uploadCaptureBundle(
                     captureIndex: index,
+                    hst: hst,
+                    capturedAt: capturedAt,
                     originalPNGData: originalData,
                     segmentedPNGData: segmentedData,
                     visualizationPNGData: visualizationData,
@@ -191,5 +220,5 @@ struct ProcessingFlowView: View {
 }
 
 #Preview {
-    ProcessingFlowView(original: UIImage(), captureIndex: "001", onClose: { _ in })
+    ProcessingFlowView(original: UIImage(), captureIndex: "001", hst: 20, capturedAt: Date(), onClose: { _ in })
 }

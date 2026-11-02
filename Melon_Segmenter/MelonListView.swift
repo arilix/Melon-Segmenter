@@ -10,6 +10,7 @@ struct MelonListView: View {
     @State private var isAddingMelon = false
     @State private var isShowingAccount = false
     @State private var melonPendingDelete: Melon?
+    @State private var processingQueue: ProcessingQueue?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -44,6 +45,9 @@ struct MelonListView: View {
             }
             .sheet(isPresented: $isShowingAccount) {
                 AccountView()
+            }
+            .fullScreenCover(item: $processingQueue) { queue in
+                ProcessingQueueView(queue: queue) { processingQueue = nil }
             }
             .confirmationDialog(
                 "Delete melon \(melonPendingDelete?.captureIndex ?? "")?",
@@ -82,7 +86,18 @@ struct MelonListView: View {
     }
 
     private var list: some View {
-        List {
+        let waiting = store.captures.filter { $0.status == .pending }
+        return List {
+            if !waiting.isEmpty {
+                Button {
+                    // Oldest first, across all melons.
+                    processingQueue = ProcessingQueue(captureIDs: waiting.sorted { $0.takenAt < $1.takenAt }.map(\.id))
+                } label: {
+                    Label("Process all waiting (\(waiting.count))", systemImage: "play.fill")
+                }
+                .buttonStyle(MelonPrimaryButtonStyle())
+                .listRowBackground(Color.clear)
+            }
             ForEach(store.melons) { melon in
                 NavigationLink(value: melon.id) {
                     row(for: melon)

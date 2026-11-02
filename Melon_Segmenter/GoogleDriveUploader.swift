@@ -65,8 +65,14 @@ final class GoogleDriveUploader {
 
     /// Uploads one capture's full artifact set into "Melon Segmenter/<dd_MM_yyyy>/"
     /// and appends a row to the cumulative "density_log.csv" at the root.
+    ///
+    /// `capturedAt` and `hst` describe when the photo was taken (it may be
+    /// processed days later), and drive the folder, file names and the
+    /// "date"/"hst" values recorded.
     func uploadCaptureBundle(
         captureIndex: String,
+        hst: Int,
+        capturedAt: Date,
         originalPNGData: Data,
         segmentedPNGData: Data,
         visualizationPNGData: Data,
@@ -76,34 +82,33 @@ final class GoogleDriveUploader {
         let user = try await ensureSignedIn(presentingViewController: presentingViewController)
         let token = user.accessToken.tokenString
 
-        let now = Date()
+        let now = capturedAt
         let rootFolderId = try await findOrCreateFolder(named: Self.rootFolderName, parentId: nil, token: token)
         let folderDateString = Self.dateFolderName(from: now)
         let dateFolderId = try await findOrCreateFolder(named: folderDateString, parentId: rootFolderId, token: token)
         let timestampString = Self.timestampString(from: now)
         let fileStamp = Self.localFileStamp(from: now)
 
-        let safeIndex = captureIndex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "unindexed-\(Int(Date().timeIntervalSince1970))"
-            : captureIndex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeIndex = captureIndex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let namePrefix = "melon-\(safeIndex)-HST\(hst)-\(fileStamp)"
 
         _ = try await uploadFile(
             data: originalPNGData,
-            fileName: "melon-\(safeIndex)-\(fileStamp)-original.png",
+            fileName: "\(namePrefix)-original.png",
             mimeType: "image/png",
             parentId: dateFolderId,
             token: token
         )
         _ = try await uploadFile(
             data: segmentedPNGData,
-            fileName: "melon-\(safeIndex)-\(fileStamp)-segmented.png",
+            fileName: "\(namePrefix)-segmented.png",
             mimeType: "image/png",
             parentId: dateFolderId,
             token: token
         )
         _ = try await uploadFile(
             data: visualizationPNGData,
-            fileName: "melon-\(safeIndex)-\(fileStamp)-gng.png",
+            fileName: "\(namePrefix)-gng.png",
             mimeType: "image/png",
             parentId: dateFolderId,
             token: token
@@ -111,7 +116,9 @@ final class GoogleDriveUploader {
 
         let metricsJSON: [String: Any] = [
             "captureIndex": safeIndex,
+            "hst": hst,
             "date": timestampString,
+            "uploadedAt": ISO8601DateFormatter().string(from: Date()),
             "polarity": metrics.invertPolarity ? "light" : "dark",
             "nodeCount": metrics.nodeCount,
             "prunedEdgeCount": metrics.prunedEdgeCount,
@@ -128,7 +135,7 @@ final class GoogleDriveUploader {
         let metricsData = try JSONSerialization.data(withJSONObject: metricsJSON, options: [.prettyPrinted])
         _ = try await uploadFile(
             data: metricsData,
-            fileName: "melon-\(safeIndex)-\(fileStamp)-metrics.json",
+            fileName: "\(namePrefix)-metrics.json",
             mimeType: "application/json",
             parentId: dateFolderId,
             token: token
@@ -136,6 +143,7 @@ final class GoogleDriveUploader {
 
         try await appendDensityLogRow(
             captureIndex: safeIndex,
+            hst: hst,
             dateString: timestampString,
             metrics: metrics,
             rootFolderId: rootFolderId,
@@ -182,19 +190,21 @@ final class GoogleDriveUploader {
     /// have shifted every column.
     private func appendDensityLogRow(
         captureIndex: String,
+        hst: Int,
         dateString: String,
         metrics: NetDensityMetrics,
         rootFolderId: String,
         token: String
     ) async throws {
-        let header = "capture_index,date,polarity,node_count,pruned_edge_count,roi_area_px,branch_density,length_density,data_fraction_of_roi,stroke_width_px,d_eq,mean_l,mean_a,mean_b\n"
+        let header = "capture_index,date,polarity,node_count,pruned_edge_count,roi_area_px,branch_density,length_density,data_fraction_of_roi,stroke_width_px,d_eq,mean_l,mean_a,mean_b,hst\n"
         let polarity = metrics.invertPolarity ? "light" : "dark"
-        let newRow = "\(csvEscape(captureIndex)),\(dateString),\(polarity),\(metrics.nodeCount),\(metrics.prunedEdgeCount),\(metrics.roiAreaPx),\(metrics.branchDensity),\(metrics.lengthDensity),\(metrics.dataFractionOfROI),\(metrics.strokeWidthPx),\(metrics.dEq),\(metrics.meanL),\(metrics.meanA),\(metrics.meanB)\n"
+        let newRow = "\(csvEscape(captureIndex)),\(dateString),\(polarity),\(metrics.nodeCount),\(metrics.prunedEdgeCount),\(metrics.roiAreaPx),\(metrics.branchDensity),\(metrics.lengthDensity),\(metrics.dataFractionOfROI),\(metrics.strokeWidthPx),\(metrics.dEq),\(metrics.meanL),\(metrics.meanA),\(metrics.meanB),\(hst)\n"
 
         let query = "name = '\(escaped(Self.densityLogFileName))' and trashed = false and '\(rootFolderId)' in parents"
         if let existingId = try await findFile(query: query, token: token) {
             let currentContent = try await downloadTextFile(fileId: existingId, token: token)
-            try await updateFileContent(fileId: existingId, content: currentContent + newRow, mimeType: "text/csv", token: token)
+            let content = Self.addingHSTColumnIfMissing(to: currentContent)
+            try await updateFileContent(fileId: existingId, content: content + newRow, mimeType: "text/csv", token: token)
         } else {
             _ = try await uploadFile(
                 data: Data((header + newRow).utf8),
@@ -204,6 +214,18 @@ final class GoogleDriveUploader {
                 token: token
             )
         }
+    }
+
+    /// Logs written before the HST column existed get the column appended
+    /// (empty for their rows), so new rows line up with the header.
+    private static func addingHSTColumnIfMissing(to csv: String) -> String {
+        var lines = csv.components(separatedBy: "\n")
+        guard let header = lines.first, !header.isEmpty, !header.hasSuffix(",hst") else { return csv }
+        lines[0] = header + ",hst"
+        for i in 1..<lines.count where !lines[i].isEmpty {
+            lines[i] += ","
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Returns the id of the first file matching `query`, or nil if none exists.
