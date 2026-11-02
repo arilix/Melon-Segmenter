@@ -1,10 +1,11 @@
 import SwiftUI
 import UIKit
-import PhotosUI
 
-struct ContentView: View {
+/// Segments one kept photo with SAM, analyzes its net, and uploads the
+/// result. Opened per photo from the melon's detail screen; the Google
+/// session already exists because sign-in happens at launch.
+struct ProcessingFlowView: View {
     private enum Stage {
-        case idle
         case segmenting(original: UIImage)
         case analyzingNet(original: UIImage, segmented: UIImage)
         case uploading
@@ -12,11 +13,18 @@ struct ContentView: View {
         case failure(String)
     }
 
-    @State private var isShowingCamera = false
-    @State private var photoPickerItem: PhotosPickerItem?
-    @State private var stage: Stage = .idle
-    @AppStorage("melon.captureIndex") private var captureIndex: String = ""
+    let captureIndex: String
+    /// Called when the user leaves; `true` if the upload finished.
+    var onClose: (_ uploaded: Bool) -> Void
+
+    @State private var stage: Stage
     private let uploader = GoogleDriveUploader()
+
+    init(original: UIImage, captureIndex: String, onClose: @escaping (Bool) -> Void) {
+        self.captureIndex = captureIndex
+        self.onClose = onClose
+        _stage = State(initialValue: .segmenting(original: original))
+    }
 
     var body: some View {
         ZStack {
@@ -27,15 +35,13 @@ struct ContentView: View {
 
                 Group {
                     switch stage {
-                    case .idle:
-                        idleView
                     case .segmenting(let original):
                         SegmentationView(
                             originalImage: original,
                             onConfirm: { segmented in
                                 stage = .analyzingNet(original: original, segmented: segmented)
                             },
-                            onRetake: { stage = .idle }
+                            onRetake: { onClose(false) }
                         )
                     case .analyzingNet(let original, let segmented):
                         GNGResultView(
@@ -44,7 +50,7 @@ struct ContentView: View {
                             onUpload: { metrics, visualization in
                                 upload(original: original, segmented: segmented, visualization: visualization, metrics: metrics)
                             },
-                            onRetake: { stage = .idle }
+                            onRetake: { onClose(false) }
                         )
                     case .uploading:
                         uploadingView
@@ -60,36 +66,6 @@ struct ContentView: View {
             .padding(.top, 12)
         }
         .preferredColorScheme(.dark)
-        .fullScreenCover(isPresented: $isShowingCamera) {
-            CameraCaptureView(
-                onCapture: { image in
-                    isShowingCamera = false
-                    stage = .segmenting(original: image)
-                },
-                onCancel: { isShowingCamera = false }
-            )
-            .ignoresSafeArea()
-        }
-        .onChange(of: photoPickerItem) { _, newItem in
-            guard let newItem else { return }
-            Task {
-                await loadPickedPhoto(newItem)
-                photoPickerItem = nil
-            }
-        }
-    }
-
-    private func loadPickedPhoto(_ item: PhotosPickerItem) async {
-        do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data) else {
-                stage = .failure("Failed to open the photo from your library.")
-                return
-            }
-            stage = .segmenting(original: image.normalizedOrientation())
-        } catch {
-            stage = .failure("Failed to open photo: \(error.localizedDescription)")
-        }
     }
 
     private var header: some View {
@@ -119,61 +95,6 @@ struct ContentView: View {
         .padding(.bottom, 4)
     }
 
-    private var idleView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            Image("MelonLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 140, height: 140)
-                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-                .shadow(color: MelonTheme.accentTeal.opacity(0.35), radius: 24, y: 8)
-
-            VStack(spacing: 8) {
-                Text("Ready to segment your melon? 🍈")
-                    .font(.title3.bold())
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-
-                Text("Take a photo of your melon, tap on it, then see how complex its net pattern is before sending it to Google Drive.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.65))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 12)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Capture Index")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.6))
-                TextField("e.g. 001", text: $captureIndex)
-                    .textFieldStyle(.plain)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 14)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .foregroundStyle(.white)
-                    .autocorrectionDisabled()
-            }
-            .padding(.horizontal, 8)
-
-            Spacer()
-
-            Button {
-                isShowingCamera = true
-            } label: {
-                Label("Take Photo", systemImage: "camera.fill")
-            }
-            .buttonStyle(MelonPrimaryButtonStyle())
-
-            PhotosPicker(selection: $photoPickerItem, matching: .images) {
-                Label("Choose from Library", systemImage: "photo.on.rectangle")
-            }
-            .buttonStyle(MelonSecondaryButtonStyle())
-        }
-        .padding(.bottom, 24)
-    }
-
     private var uploadingView: some View {
         VStack(spacing: 20) {
             Spacer()
@@ -196,16 +117,16 @@ struct ContentView: View {
             Text("Upload successful! 🎉")
                 .font(.title3.bold())
                 .foregroundStyle(.white)
-            Text("The original photo, segmentation result, GNG visualization, and complexity data have been saved to the \"Melon Segmenter\" folder — including a new row in complexity_log.csv.")
+            Text("The original photo, segmentation result, GNG visualization, and density data have been saved to the \"Melon Segmenter\" folder, including a new row in density_log.csv.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.65))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 12)
             Spacer()
             Button {
-                stage = .idle
+                onClose(true)
             } label: {
-                Label("Take Another Photo", systemImage: "camera.fill")
+                Label("Done", systemImage: "checkmark")
             }
             .buttonStyle(MelonPrimaryButtonStyle())
         }
@@ -228,9 +149,9 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
             Spacer()
             Button {
-                stage = .idle
+                onClose(false)
             } label: {
-                Label("Try Again", systemImage: "arrow.counterclockwise")
+                Label("Back", systemImage: "chevron.left")
             }
             .buttonStyle(MelonPrimaryButtonStyle())
         }
@@ -269,15 +190,6 @@ struct ContentView: View {
     }
 }
 
-private extension UIApplication {
-    var keyWindowRootViewController: UIViewController? {
-        connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap { $0.windows }
-            .first { $0.isKeyWindow }?.rootViewController
-    }
-}
-
 #Preview {
-    ContentView()
+    ProcessingFlowView(original: UIImage(), captureIndex: "001", onClose: { _ in })
 }

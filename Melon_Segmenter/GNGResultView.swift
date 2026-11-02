@@ -55,7 +55,7 @@ struct GNGResultView: View {
                 Button {
                     onRetake()
                 } label: {
-                    Label("Retake", systemImage: "arrow.counterclockwise")
+                    Label("Back", systemImage: "chevron.left")
                 }
                 .buttonStyle(MelonSecondaryButtonStyle())
             } else if let metrics, let visualization {
@@ -86,7 +86,7 @@ struct GNGResultView: View {
                     Button {
                         onRetake()
                     } label: {
-                        Label("Retake", systemImage: "arrow.counterclockwise")
+                        Label("Back", systemImage: "chevron.left")
                     }
                     .buttonStyle(MelonSecondaryButtonStyle())
 

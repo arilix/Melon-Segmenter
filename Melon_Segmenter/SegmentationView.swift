@@ -56,7 +56,7 @@ struct SegmentationView: View {
                 Button {
                     onRetake()
                 } label: {
-                    Label("Retake", systemImage: "arrow.counterclockwise")
+                    Label("Back", systemImage: "chevron.left")
                 }
                 .buttonStyle(MelonSecondaryButtonStyle())
 

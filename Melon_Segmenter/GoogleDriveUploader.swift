@@ -58,7 +58,9 @@ final class GoogleDriveUploader {
         guard user.grantedScopes?.contains(Self.driveFileScope) == true else {
             throw GoogleDriveUploaderError.driveScopeNotGranted
         }
-        return user
+        // Sign-in now happens at launch, so by upload time the access token
+        // may be an hour old; refresh it if needed.
+        return try await user.refreshTokensIfNeeded()
     }
 
     /// Uploads one capture's full artifact set into "Melon Segmenter/<dd_MM_yyyy>/"
