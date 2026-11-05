@@ -85,6 +85,19 @@ The app also reports the GNG node count and the number of pruned edges.
 
 > **Comparing results.** Only compare metrics that were produced with the same polarity setting ("Net is lighter than skin" on or off). The polarity is stored with every upload, so you can filter on it later.
 
+## Android
+
+An Android version built with Flutter lives in [`melon_flutter/`](melon_flutter/) (MobileSAM through ONNX Runtime, same analysis, same Drive upload). Ready-to-install builds are in [`releases/`](releases/):
+
+| File | Use for |
+| --- | --- |
+| `Melon_Segmenter-android-arm64-v8a.apk` | Almost every current Android phone |
+| `Melon_Segmenter-android-armeabi-v7a.apk` | Older 32-bit phones |
+| `Melon_Segmenter-android-x86_64.apk` | Emulators |
+| `Melon_Segmenter.ipa` | iPhone / iPad (unsigned, for sideloading) |
+
+Google Drive upload on Android needs its own OAuth clients; see [`melon_flutter/README.md`](melon_flutter/README.md).
+
 ## Requirements
 
 | | |
