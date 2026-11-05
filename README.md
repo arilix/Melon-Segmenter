@@ -1,12 +1,14 @@
 # Melon Segmenter 🍈
 
-**Cut your melon with AI.** Melon Segmenter is an iOS app that isolates a melon from a photo with a single tap, then measures how dense the netting on its rind is.
+**Cut your melon with AI.** Melon Segmenter is an iOS/iPadOS app that isolates a melon from a photo with a single tap, then measures how dense the netting on its rind is. It also keeps a library of the melons you track, with a capture schedule, reminders and a processing queue for field data collection.
 
 Everything runs on the device: the segmentation uses [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) through Core ML, and the net analysis uses a Swift port of the DBL-GNG (Distributed Batch Learning Growing Neural Gas) algorithm. Results can optionally be uploaded to your own Google Drive.
 
 > The app **measures** the rind netting; it does not classify ripeness. The numbers are intended as input for studies of melon appearance, for example ripeness research.
 
 ## Screenshots
+
+### iPhone
 
 <table>
   <tr>
@@ -17,7 +19,31 @@ Everything runs on the device: the segmentation uses [MobileSAM](https://github.
   </tr>
 </table>
 
-The screenshots were taken in the iOS 27 Simulator with the sample photo [`docs/sample/demo_melon.jpg`](docs/sample/demo_melon.jpg). You can use the same photo to try the app yourself (see [Try it without a melon](#try-it-without-a-melon)).
+### iPad: melon library and field workflow
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/ipad-08-melon-list.jpg" width="300" alt="Melon list"><br><sub><b>Melon library</b><br>Every tracked melon with its HST (days after planting). A banner shows when today is a capture day.</sub></td>
+    <td align="center"><img src="docs/images/ipad-06-melon-list-queue.jpg" width="300" alt="Melon list with processing queue"><br><sub><b>Processing queue</b><br>Photos taken in the field wait here; <i>Process all waiting</i> runs them in one go.</sub></td>
+    <td align="center"><img src="docs/images/ipad-03-add-melon.jpg" width="300" alt="Add melon"><br><sub><b>Add a melon</b><br>Enter the ID and today's HST once. The app counts it up by itself.</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/ipad-04-melon-detail.jpg" width="300" alt="Melon detail with kept photos"><br><sub><b>Melon detail</b><br>Take or choose a photo. Kept photos can be processed later.</sub></td>
+    <td align="center"><img src="docs/images/ipad-05-select-melon.jpg" width="300" alt="Tap the melon to segment it"><br><sub><b>Select the melon</b><br>Tap the melon in the photo to segment it.</sub></td>
+    <td align="center"><img src="docs/images/ipad-07-settings.jpg" width="300" alt="Settings"><br><sub><b>Settings</b><br>Google account, capture schedule (weekdays or every N days), reminder time and photo storage.</sub></td>
+  </tr>
+</table>
+
+### iPad: net analysis
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/ipad-01-analysis.jpg" width="440" alt="Six-panel analysis with binary thickness slider"><br><sub><b>Six-panel analysis</b><br>Per-panel thickness slider for the binary net mask (panel 4).</sub></td>
+    <td align="center"><img src="docs/images/ipad-02-gng.jpg" width="440" alt="GNG overlay with edge thickness slider"><br><sub><b>GNG overlay</b><br>Edge thickness slider for the pruned GNG graph (panel 5) and the polarity toggle.</sub></td>
+  </tr>
+</table>
+
+The iPhone screenshots above were taken in the iOS 27 Simulator with the sample photo [`docs/sample/demo_melon.jpg`](docs/sample/demo_melon.jpg). You can use the same photo to try the app yourself (see [Try it without a melon](#try-it-without-a-melon)). The iPad screenshots come from a physical iPad.
 
 ## Features
 
@@ -26,6 +52,11 @@ The screenshots were taken in the iOS 27 Simulator with the sample photo [`docs/
 - **Visual debugging.** The result screen shows every processing stage: segmentation, grayscale, Gaussian blur, binary "net" mask, and the pruned GNG graph.
 - **Reproducible results.** Sampling uses a seeded random number generator, so the same image always gives the same metrics.
 - **Light or dark net.** A toggle switches the threshold polarity for melons whose net is lighter than the skin (typical for many netted melons) or darker.
+- **Melon library.** Add the melons you track with an ID and their HST (days after planting); the HST counts up automatically, and the list can be reordered.
+- **Capture schedule and reminders.** One schedule for all melons (days of the week or every N days) with a daily reminder time, plus a banner on capture days.
+- **Kept photos and processing queue.** Photos are stored inside the app and can be processed later, one by one or all at once. They are deleted after a successful upload.
+- **Adjustable overlays.** Per-panel sliders control the thickness of the binary net mask and the GNG edges.
+- **Google login at launch.** Sign in once; uploads retry automatically when a token has expired.
 - **Optional Google Drive upload.** The original photo, the cutout, the GNG overlay, a metrics JSON file, and a running CSV log are saved to your Drive.
 
 ## How it works
@@ -59,7 +90,7 @@ The app also reports the GNG node count and the number of pruned edges.
 | | |
 | --- | --- |
 | **Xcode** | 27 or later. The project file format (`objectVersion = 90`) was written by Xcode 27. |
-| **iOS** | 17.0 or later (iPhone and iPad). |
+| **iOS** | 17.0 or later (iPhone and iPad). An unsigned `.ipa` for sideloading (for example with AltStore) is in [`releases/`](releases/). |
 | **Swift** | 5 language mode. |
 | **Apple Developer account** | A free account is enough to run on your own device. |
 | **Internet access** | Needed once, to download the Swift packages. Google Drive upload needs it at run time too. |
@@ -71,8 +102,8 @@ The Swift packages are fetched automatically by Xcode: [SamKit](https://github.c
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yani-rl-ai/Melon_Segmenter.git
-cd Melon_Segmenter
+git clone https://github.com/arilix/Melon-segmenter.git
+cd Melon-segmenter
 ```
 
 ### 2. Open the project
